@@ -1,0 +1,432 @@
+{
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "instructions": "You are a PostgreSQL assistant. Use the available PostgreSQL tools to carry out the user's requested database actions. Write operations are permitted when requested.",
+    "input": [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant"
+        },
+        {
+            "role": "developer",
+            "content": "You are a helpful assistant with must stay on the topic"
+        },
+        {
+            "role": "user",
+            "content": "Create table \"customer\" with standard fields used in e-commerce"
+        },
+        {
+            "id": "rs_tmp_fp0orh83jll",
+            "summary": [],
+            "type": "reasoning",
+            "content": [
+                {
+                    "text": "The user wants a customer table with standard e-commerce fields. Let me check if it exists first, then create it.\n\nLet me look at existing schemas/tables to match conventions.",
+                    "type": "reasoning_text"
+                }
+            ],
+            "status": "completed",
+            "format": "unknown"
+        },
+        {
+            "id": "msg_tmp_8wef4jmce2p",
+            "content": [
+                {
+                    "annotations": [],
+                    "text": "I'll check the existing database structure first so the new table fits your conventions.\n\n",
+                    "type": "output_text",
+                    "logprobs": []
+                }
+            ],
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+        },
+        {
+            "arguments": "{}",
+            "call_id": "call_a6fe6fd2a25d4fb4ba65b7b40b27aed3",
+            "name": "list_schemas",
+            "type": "function_call",
+            "id": "fc_tmp_4445q91r8on",
+            "status": "completed"
+        },
+        {
+            "arguments": "{\"schema\": \"public\"}",
+            "call_id": "call_1c69e73f0dca419695f3b47f0379c9f2",
+            "name": "list_tables",
+            "type": "function_call",
+            "id": "fc_tmp_oic7h7xrey",
+            "status": "completed"
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_a6fe6fd2a25d4fb4ba65b7b40b27aed3",
+            "output": "{\"meta\": null, \"content\": [{\"type\": \"text\", \"text\": \"{\\\"schemas\\\":[\\\"information_schema\\\",\\\"pg_catalog\\\",\\\"pg_toast\\\",\\\"public\\\"]}\", \"annotations\": null, \"meta\": null}], \"structured_content\": null, \"is_error\": false, \"result_type\": \"complete\"}"
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_1c69e73f0dca419695f3b47f0379c9f2",
+            "output": "{\"meta\": null, \"content\": [{\"type\": \"text\", \"text\": \"{\\\"tables\\\":[]}\", \"annotations\": null, \"meta\": null}], \"structured_content\": null, \"is_error\": false, \"result_type\": \"complete\"}"
+        },
+        {
+            "id": "rs_tmp_p3hucvn8zih",
+            "summary": [],
+            "type": "reasoning",
+            "content": [
+                {
+                    "text": "No existing tables. So I'll create the customer table with standard e-commerce fields. Nothing to match conventions with.\n\nThe user wrote \"customer\" in quotes — likely the name. I'll create a table named customer in public schema.\n\nDesign: standard e-commerce customer fields.\n\n- customer_id BIGSERIAL PRIMARY KEY (or UUID)\n- email CITEXT? citext extension may not be installed; I can use TEXT with UNIQUE and a lower() index. Better: use TEXT + CHECK email ~ pattern, and unique index on lower(email). Actually to keep simple: email TEXT NOT NULL UNIQUE. But uniqueness case-insensitive is nicer. I'll create unique index on lower(email) instead of a plain UNIQUE constraint. Hmm, could try citext if extension available. Let me check available extensions... simpler to use TEXT + unique index on lower(email).\n- first_name, last_name\n- phone\n- date_of_birth\n- password_hash\n- status (active, inactive, suspended, pending) via CHECK or enum\n- is_guest boolean\n- email_verified_at, phone_verified_at\n- marketing_opt_in\n- addresses — probably separate tables, but \"standard fields used in e-commerce\" — keep it to customer table. Maybe include some address summary? I'd keep it normalized: no address fields; mention a separate address table as a follow-up.\n- loyalty_points integer\n- total_spent / total_orders? Those are derived; skip or include as denormalized. I'd skip and mention.\n- created_at, updated_at, last_login_at, deleted_at (soft delete)\n- referral / notes\n\nShould I create one statement? Tool takes one statement per call. So need separate calls: CREATE TABLE, indexes, trigger function for updated_at maybe. Keep it reasonable: create table with constraints, add indexes (one per call), maybe a trigger function + trigger. I'll do a moderate set.\n\nLet me write it.\n\nCREATE TABLE customer (\n  customer_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,\n  email TEXT NOT NULL,\n  email_verified_at TIMESTAMPTZ,\n  password_hash TEXT,\n  first_name TEXT NOT NULL,\n  last_name TEXT,\n  phone TEXT,\n  date_of_birth DATE,\n  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('pending','active','inactive','suspended')),\n  is_guest BOOLEAN NOT NULL DEFAULT FALSE,\n  marketing_opt_in BOOLEAN NOT NULL DEFAULT FALSE,\n  loyalty_points INTEGER NOT NULL DEFAULT 0 CHECK (loyalty_points >= 0),\n  currency CHAR(3) NOT NULL DEFAULT 'USD',\n  locale TEXT,\n  notes TEXT,\n  last_login_at TIMESTAMPTZ,\n  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n  deleted_at TIMESTAMPTZ,\n  CONSTRAINT customer_email_format CHECK (email ~ '^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$'),\n  CONSTRAINT customer_loyalty_points_nonneg CHECK (loyalty_points >= 0)\n);\n\nAlso CHECK (first_name <> '')? Simplicity. Add phone format? skip.\n\nIndexes:\nCREATE UNIQUE INDEX customer_email_key ON customer (lower(email)) WHERE deleted_at IS NULL; — hmm soft-delete with unique index partial. That allows re-registration after soft delete. That's a design decision; fine, mention it.\n\nActually if a partial index with deleted_at IS NULL, then multiple deleted rows with same email allowed. Fine.\n\nCREATE INDEX customer_created_at_idx ON customer (created_at DESC);\nCREATE INDEX customer_status_idx ON customer (status) WHERE deleted_at IS NULL;  -- maybe skip\nCREATE INDEX customer_name_idx on customer (lower(last_name), lower(first_name));\n\nTrigger for updated_at:\nCREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.updated_at = now(); RETURN NEW; END $$;\nThen CREATE TRIGGER.\n\nThen verify with \\d — can't; use describe_table.\n\nLet me do it: create table, then indexes (3 separate calls—can batch in parallel? They're independent, but multiple DDL in same block might conflict? They're independent statements on different objects; parallel could be fine, but safer sequential given DDL locks? They target different indexes on the same table; concurrent CREATE INDEX takes SHARE lock, compatible with each other. Hmm, CREATE INDEX concurrently would be blocked, but regular CREATE INDEX takes SHARE lock which conflicts with ROW EXCLUSIVE? Actually CREATE INDEX takes SHARE lock on the table; SHARE is compatible with SHARE. So two concurrent CREATE INDEX on same table are fine. But it's still risky. I'll do them in two batches.\n\nActually simpler: just do sequential calls, but that's many turns. I can do the function+trigger and indexes in ~2-3 calls. Let me do: call 1 = CREATE TABLE. Then call 2 = function. Call 3 = trigger. Plus indexes. That's 5-6 calls. Acceptable but verbose. I can combine indexes into ONE statement? \"one statement per call\" — no. But I can create multiple indexes in a single CREATE INDEX? No.\n\nAlternative: drop the function (updated_at trigger) — but it's nice-to-have. Many users like it. I'll include it.\n\nOrder: table → unique index → other indexes (parallel) → function → trigger.\n\nLet me batch: after table, parallel: index on email, index on created_at, index name... but CREATE UNIQUE INDEX on lower(email) and other indexes: fine.\n\nLet's go.",
+                    "type": "reasoning_text"
+                }
+            ],
+            "status": "completed",
+            "format": "unknown"
+        },
+        {
+            "id": "msg_tmp_g1ms7hgv04",
+            "content": [
+                {
+                    "annotations": [],
+                    "text": "No existing tables, so I'll set the conventions. Creating the table now.",
+                    "type": "output_text",
+                    "logprobs": []
+                }
+            ],
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+        },
+        {
+            "arguments": "{\"sql\": \"CREATE TABLE public.customer (\\n    customer_id       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,\\n    email             TEXT        NOT NULL,\\n    email_verified_at TIMESTAMPTZ,\\n    password_hash     TEXT,\\n    first_name        TEXT        NOT NULL,\\n    last_name         TEXT,\\n    phone             TEXT,\\n    date_of_birth     DATE,\\n    status            TEXT        NOT NULL DEFAULT 'active'\\n                      CHECK (status IN ('pending', 'active', 'inactive', 'suspended')),\\n    is_guest          BOOLEAN     NOT NULL DEFAULT FALSE,\\n    marketing_opt_in  BOOLEAN     NOT NULL DEFAULT FALSE,\\n    loyalty_points    INTEGER     NOT NULL DEFAULT 0 CHECK (loyalty_points >= 0),\\n    currency          CHAR(3)     NOT NULL DEFAULT 'USD',\\n    locale            TEXT,\\n    notes             TEXT,\\n    last_login_at     TIMESTAMPTZ,\\n    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),\\n    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),\\n    deleted_at        TIMESTAMPTZ,\\n    CONSTRAINT customer_email_format\\n        CHECK (email ~ '^[^@[:space:]]+@[^@[:space:]]+\\\\.[^@[:space:]]+$'),\\n    CONSTRAINT customer_names_not_blank\\n        CHECK (length(btrim(first_name)) > 0),\\n    CONSTRAINT customer_guest_has_no_credentials\\n        CHECK (NOT is_guest OR password_hash IS NULL)\\n)\"}",
+            "call_id": "call_5a0cc26315aa47e69631e295",
+            "name": "execute",
+            "type": "function_call",
+            "id": "fc_tmp_ihciujy7y8f",
+            "status": "completed"
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_5a0cc26315aa47e69631e295",
+            "output": "{\"meta\": null, \"content\": [{\"type\": \"text\", \"text\": \"{\\\"rowCount\\\":null,\\\"command\\\":\\\"CREATE\\\"}\", \"annotations\": null, \"meta\": null}], \"structured_content\": null, \"is_error\": false, \"result_type\": \"complete\"}"
+        },
+        {
+            "id": "rs_tmp_2k3nhasr7bf",
+            "summary": [],
+            "type": "reasoning",
+            "content": [
+                {
+                    "text": "Now indexes. Parallel calls: unique email index, created_at index, name index. These are independent DDL on same table — concurrent CREATE INDEX takes SHARE lock, compatible. But to be safe I'll do them in two batches... Actually the tools are executed in the same block; if the server serializes them, it's fine. Risk: deadlock unlikely with SHARE locks. I'll just do them sequentially to be safe but that's 3 calls. Let me just do two at a time? I'll do all three in one block — CREATE INDEX statements all take SHARE on table, compatible with each other, so no blocking.\n\nActually careful: the auto-generated CREATE INDEX also takes a lock... SHARE locks are mutually compatible. Yes, fine.\n\nAlso the function and trigger — the function is independent of the table, so I can include it in the same block.",
+                    "type": "reasoning_text"
+                }
+            ],
+            "status": "completed",
+            "format": "unknown"
+        },
+        {
+            "arguments": "{\"sql\": \"CREATE UNIQUE INDEX customer_email_key ON public.customer (lower(email)) WHERE deleted_at IS NULL\"}",
+            "call_id": "call_90d1f106112246ada81b2ed6",
+            "name": "execute",
+            "type": "function_call",
+            "id": "fc_tmp_ympkvyue0gb",
+            "status": "completed"
+        },
+        {
+            "arguments": "{\"sql\": \"CREATE INDEX customer_created_at_idx ON public.customer (created_at DESC)\"}",
+            "call_id": "call_21950a5b9aaa4788adc6f4ee",
+            "name": "execute",
+            "type": "function_call",
+            "id": "fc_tmp_nm1egcpaazh",
+            "status": "completed"
+        },
+        {
+            "arguments": "{\"sql\": \"CREATE INDEX customer_name_idx ON public.customer (lower(last_name), lower(first_name))\"}",
+            "call_id": "call_ad5d83fdd03d4b388675fa66",
+            "name": "execute",
+            "type": "function_call",
+            "id": "fc_tmp_n1vxpx26rc",
+            "status": "completed"
+        },
+        {
+            "arguments": "{\"sql\": \"CREATE OR REPLACE FUNCTION public.set_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$\\nBEGIN\\n    NEW.updated_at := now();\\n    RETURN NEW;\\nEND;\\n$$\"}",
+            "call_id": "call_8554b7bf18e34dbd92223186",
+            "name": "execute",
+            "type": "function_call",
+            "id": "fc_tmp_3cztux6hnw5",
+            "status": "completed"
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_90d1f106112246ada81b2ed6",
+            "output": "{\"meta\": null, \"content\": [{\"type\": \"text\", \"text\": \"{\\\"rowCount\\\":null,\\\"command\\\":\\\"CREATE\\\"}\", \"annotations\": null, \"meta\": null}], \"structured_content\": null, \"is_error\": false, \"result_type\": \"complete\"}"
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_21950a5b9aaa4788adc6f4ee",
+            "output": "{\"meta\": null, \"content\": [{\"type\": \"text\", \"text\": \"{\\\"rowCount\\\":null,\\\"command\\\":\\\"CREATE\\\"}\", \"annotations\": null, \"meta\": null}], \"structured_content\": null, \"is_error\": false, \"result_type\": \"complete\"}"
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_ad5d83fdd03d4b388675fa66",
+            "output": "{\"meta\": null, \"content\": [{\"type\": \"text\", \"text\": \"{\\\"rowCount\\\":null,\\\"command\\\":\\\"CREATE\\\"}\", \"annotations\": null, \"meta\": null}], \"structured_content\": null, \"is_error\": false, \"result_type\": \"complete\"}"
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_8554b7bf18e34dbd92223186",
+            "output": "{\"meta\": null, \"content\": [{\"type\": \"text\", \"text\": \"{\\\"rowCount\\\":null,\\\"command\\\":\\\"CREATE\\\"}\", \"annotations\": null, \"meta\": null}], \"structured_content\": null, \"is_error\": false, \"result_type\": \"complete\"}"
+        },
+        {
+            "arguments": "{\"sql\": \"CREATE TRIGGER customer_set_updated_at\\n    BEFORE UPDATE ON public.customer\\n    FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()\"}",
+            "call_id": "call_c4aa6d8009734a89b0e3abe2",
+            "name": "execute",
+            "type": "function_call",
+            "id": "fc_tmp_hrcj7mcxnr",
+            "status": "completed"
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_c4aa6d8009734a89b0e3abe2",
+            "output": "{\"meta\": null, \"content\": [{\"type\": \"text\", \"text\": \"{\\\"rowCount\\\":null,\\\"command\\\":\\\"CREATE\\\"}\", \"annotations\": null, \"meta\": null}], \"structured_content\": null, \"is_error\": false, \"result_type\": \"complete\"}"
+        },
+        {
+            "id": "rs_tmp_gl22egnuvyv",
+            "summary": [],
+            "type": "reasoning",
+            "content": [
+                {
+                    "text": "Now verify with a quick smoke test: insert a row, check updated_at trigger, then delete it. Let's do a test insert + rollback... can't use transactions. I can insert and then delete. Let's do it to verify, then clean up.\n\nActually, do it: insert a test row, select it, then delete. Keep the table clean.\n\nLet me verify describe_table and run a smoke test insert.",
+                    "type": "reasoning_text"
+                }
+            ],
+            "status": "completed",
+            "format": "unknown"
+        },
+        {
+            "arguments": "{\"sql\": \"INSERT INTO public.customer (email, first_name, last_name, phone, marketing_opt_in, loyalty_points)\\nVALUES ('Jane.Doe@Example.com', 'Jane', 'Doe', '+1 555 010 9999', TRUE, 250)\\nRETURNING customer_id, email, status, currency, created_at, updated_at\"}",
+            "call_id": "call_292ad51461d649c491f0af11",
+            "name": "execute",
+            "type": "function_call",
+            "id": "fc_tmp_pcp56u1tpio",
+            "status": "completed"
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_292ad51461d649c491f0af11",
+            "output": "{\"meta\": null, \"content\": [{\"type\": \"text\", \"text\": \"{\\\"rowCount\\\":1,\\\"command\\\":\\\"INSERT\\\"}\", \"annotations\": null, \"meta\": null}], \"structured_content\": null, \"is_error\": false, \"result_type\": \"complete\"}"
+        },
+        {
+            "id": "rs_tmp_wu4s8gx762",
+            "summary": [],
+            "type": "reasoning",
+            "content": [
+                {
+                    "text": "Now test constraint: duplicate email different case should fail (unique on lower(email)). And test the validation constraint. Let's test the duplicate case, expecting an error. Then clean up test row.\n\nI'll test duplicate insert — it'll error, which is expected. The tool will report error. That's fine and informative.",
+                    "type": "reasoning_text"
+                }
+            ],
+            "status": "completed",
+            "format": "unknown"
+        },
+        {
+            "arguments": "{\"sql\": \"INSERT INTO public.customer (email, first_name) VALUES ('jane.doe@EXAMPLE.com', 'Duplicate')\"}",
+            "call_id": "call_3f7f0ee6e183450d968422e2",
+            "name": "execute",
+            "type": "function_call",
+            "id": "fc_tmp_5itp8imvpqd",
+            "status": "completed"
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_3f7f0ee6e183450d968422e2",
+            "output": "{\"meta\": null, \"content\": [{\"type\": \"text\", \"text\": \"{\\\"message\\\":\\\"duplicate key value violates unique constraint \\\\\\\"customer_email_key\\\\\\\"\\\",\\\"code\\\":\\\"23505\\\"}\", \"annotations\": null, \"meta\": null}], \"structured_content\": null, \"is_error\": true, \"result_type\": \"complete\"}"
+        },
+        {
+            "id": "rs_tmp_4vetayxfz88",
+            "summary": [],
+            "type": "reasoning",
+            "content": [
+                {
+                    "text": "Good — case-insensitive uniqueness works. Now test the guest/password constraint and the email format, then clean up. Let me test one invalid email and the trigger update together? Separate calls.\n\nTest updated_at trigger: UPDATE ... set status='suspended' returning updated_at.\n\nThen delete test row.",
+                    "type": "reasoning_text"
+                }
+            ],
+            "status": "completed",
+            "format": "unknown"
+        },
+        {
+            "arguments": "{\"sql\": \"UPDATE public.customer SET status = 'suspended', last_login_at = now()\\nWHERE email = 'Jane.Doe@Example.com'\\nRETURNING customer_id, status, (updated_at > created_at) AS updated_at_bumped\"}",
+            "call_id": "call_41c00ecb576f4ba8b40fe4e9",
+            "name": "execute",
+            "type": "function_call",
+            "id": "fc_tmp_s2ijnatwz7c",
+            "status": "completed"
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_41c00ecb576f4ba8b40fe4e9",
+            "output": "{\"meta\": null, \"content\": [{\"type\": \"text\", \"text\": \"{\\\"rowCount\\\":1,\\\"command\\\":\\\"UPDATE\\\"}\", \"annotations\": null, \"meta\": null}], \"structured_content\": null, \"is_error\": false, \"result_type\": \"complete\"}"
+        },
+        {
+            "arguments": "{\"sql\": \"SELECT customer_id, email, first_name, last_name, status, is_guest, marketing_opt_in,\\n       loyalty_points, currency, (updated_at > created_at) AS updated_at_bumped\\nFROM public.customer\"}",
+            "call_id": "call_f37aeaa561fd43f8a2cfde26",
+            "name": "query",
+            "type": "function_call",
+            "id": "fc_tmp_trry8mvgoil",
+            "status": "completed"
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_f37aeaa561fd43f8a2cfde26",
+            "output": "{\"meta\": null, \"content\": [{\"type\": \"text\", \"text\": \"{\\\"rows\\\":[{\\\"customer_id\\\":\\\"1\\\",\\\"email\\\":\\\"Jane.Doe@Example.com\\\",\\\"first_name\\\":\\\"Jane\\\",\\\"last_name\\\":\\\"Doe\\\",\\\"status\\\":\\\"suspended\\\",\\\"is_guest\\\":false,\\\"marketing_opt_in\\\":true,\\\"loyalty_points\\\":250,\\\"currency\\\":\\\"USD\\\",\\\"updated_at_bumped\\\":true}],\\\"rowCount\\\":1,\\\"returnedRows\\\":1,\\\"truncated\\\":false}\", \"annotations\": null, \"meta\": null}], \"structured_content\": null, \"is_error\": false, \"result_type\": \"complete\"}"
+        },
+        {
+            "id": "rs_tmp_9ff3tserwy",
+            "summary": [],
+            "type": "reasoning",
+            "content": [
+                {
+                    "text": "Everything works. Now remove the test row so the table is clean.",
+                    "type": "reasoning_text"
+                }
+            ],
+            "status": "completed",
+            "format": "unknown"
+        },
+        {
+            "arguments": "{\"sql\": \"DELETE FROM public.customer WHERE email = 'Jane.Doe@Example.com'\"}",
+            "call_id": "call_a7e74e7cc24f4409bb73e2d9",
+            "name": "execute",
+            "type": "function_call",
+            "id": "fc_tmp_9dt1todpnp7",
+            "status": "completed"
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_a7e74e7cc24f4409bb73e2d9",
+            "output": "{\"meta\": null, \"content\": [{\"type\": \"text\", \"text\": \"{\\\"rowCount\\\":1,\\\"command\\\":\\\"DELETE\\\"}\", \"annotations\": null, \"meta\": null}], \"structured_content\": null, \"is_error\": false, \"result_type\": \"complete\"}"
+        },
+        {
+            "arguments": "{\"table\": \"customer\", \"schema\": \"public\"}",
+            "call_id": "call_dbb7c97878234ecea2c77344",
+            "name": "describe_table",
+            "type": "function_call",
+            "id": "fc_tmp_5q2viv3se5m",
+            "status": "completed"
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_dbb7c97878234ecea2c77344",
+            "output": "{\"meta\": null, \"content\": [{\"type\": \"text\", \"text\": \"{\\\"columns\\\":[{\\\"column\\\":\\\"customer_id\\\",\\\"type\\\":\\\"bigint\\\",\\\"nullable\\\":false,\\\"default\\\":null,\\\"is_primary_key\\\":true},{\\\"column\\\":\\\"email\\\",\\\"type\\\":\\\"text\\\",\\\"nullable\\\":false,\\\"default\\\":null,\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"email_verified_at\\\",\\\"type\\\":\\\"timestamp with time zone\\\",\\\"nullable\\\":true,\\\"default\\\":null,\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"password_hash\\\",\\\"type\\\":\\\"text\\\",\\\"nullable\\\":true,\\\"default\\\":null,\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"first_name\\\",\\\"type\\\":\\\"text\\\",\\\"nullable\\\":false,\\\"default\\\":null,\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"last_name\\\",\\\"type\\\":\\\"text\\\",\\\"nullable\\\":true,\\\"default\\\":null,\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"phone\\\",\\\"type\\\":\\\"text\\\",\\\"nullable\\\":true,\\\"default\\\":null,\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"date_of_birth\\\",\\\"type\\\":\\\"date\\\",\\\"nullable\\\":true,\\\"default\\\":null,\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"status\\\",\\\"type\\\":\\\"text\\\",\\\"nullable\\\":false,\\\"default\\\":\\\"'active'::text\\\",\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"is_guest\\\",\\\"type\\\":\\\"boolean\\\",\\\"nullable\\\":false,\\\"default\\\":\\\"false\\\",\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"marketing_opt_in\\\",\\\"type\\\":\\\"boolean\\\",\\\"nullable\\\":false,\\\"default\\\":\\\"false\\\",\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"loyalty_points\\\",\\\"type\\\":\\\"integer\\\",\\\"nullable\\\":false,\\\"default\\\":\\\"0\\\",\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"currency\\\",\\\"type\\\":\\\"character\\\",\\\"nullable\\\":false,\\\"default\\\":\\\"'USD'::bpchar\\\",\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"locale\\\",\\\"type\\\":\\\"text\\\",\\\"nullable\\\":true,\\\"default\\\":null,\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"notes\\\",\\\"type\\\":\\\"text\\\",\\\"nullable\\\":true,\\\"default\\\":null,\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"last_login_at\\\",\\\"type\\\":\\\"timestamp with time zone\\\",\\\"nullable\\\":true,\\\"default\\\":null,\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"created_at\\\",\\\"type\\\":\\\"timestamp with time zone\\\",\\\"nullable\\\":false,\\\"default\\\":\\\"now()\\\",\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"updated_at\\\",\\\"type\\\":\\\"timestamp with time zone\\\",\\\"nullable\\\":false,\\\"default\\\":\\\"now()\\\",\\\"is_primary_key\\\":false},{\\\"column\\\":\\\"deleted_at\\\",\\\"type\\\":\\\"timestamp with time zone\\\",\\\"nullable\\\":true,\\\"default\\\":null,\\\"is_primary_key\\\":false}]}\", \"annotations\": null, \"meta\": null}], \"structured_content\": null, \"is_error\": false, \"result_type\": \"complete\"}"
+        }
+    ],
+    "tools": [
+        {
+            "type": "function",
+            "name": "query",
+            "description": "Run one SQL statement against the connected PostgreSQL database and get rows back as JSON. Because the server was started with PG_ALLOW_WRITE=true, the statement is sent directly and can modify data - use the execute tool for writes and this for reads. Send exactly one statement per call. Returns {rows, rowCount, returnedRows, truncated}, plus hint when truncated is true. Prefer $1, $2 placeholders with the params array over interpolating values. Results are capped at ~32768 bytes; truncated:true means rows were dropped - add LIMIT/WHERE or select fewer columns.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql": {
+                        "type": "string",
+                        "description": "One SQL statement. Use $1, $2, ... for parameters."
+                    },
+                    "params": {
+                        "type": "array",
+                        "items": {
+                            "type": [
+                                "string",
+                                "number",
+                                "boolean",
+                                "null"
+                            ]
+                        },
+                        "description": "Positional parameter values bound to $1, $2, ... placeholders."
+                    }
+                },
+                "required": [
+                    "sql"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "type": "function",
+            "name": "execute",
+            "description": "Run one data-modifying SQL statement - INSERT, UPDATE, DELETE, or DDL like CREATE/ALTER - and get the affected row count back. Use the query tool for anything that reads. Send exactly one complete statement per call; do not use explicit transaction or session control (BEGIN, COMMIT, SET, ...). Prefer $1, $2 placeholders with the params array. This tool exists because the server was started with PG_ALLOW_WRITE=true. Returns {rowCount, command}; rowCount is null for statements that affect no rows, such as DDL.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql": {
+                        "type": "string",
+                        "description": "One INSERT / UPDATE / DELETE / DDL statement. Use $1, $2, ... for parameters."
+                    },
+                    "params": {
+                        "type": "array",
+                        "items": {
+                            "type": [
+                                "string",
+                                "number",
+                                "boolean",
+                                "null"
+                            ]
+                        },
+                        "description": "Positional parameter values bound to $1, $2, ... placeholders."
+                    }
+                },
+                "required": [
+                    "sql"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "type": "function",
+            "name": "list_schemas",
+            "description": "List every schema in the connected database. Start here when exploring an unfamiliar database, then call list_tables for the schema you care about. Returns {schemas: [name, ...]}.",
+            "parameters": {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "type": "function",
+            "name": "list_tables",
+            "description": "List all tables in a schema (default: 'public'). Use this before querying tables you have not seen yet, then call describe_table for column details. Returns {tables: [name, ...]}.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "schema": {
+                        "type": "string",
+                        "description": "Schema name (default: 'public')"
+                    }
+                },
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        },
+        {
+            "type": "function",
+            "name": "describe_table",
+            "description": "Show the structure of one table: column names, data types, nullability, defaults, and primary-key membership. Call this before writing non-trivial queries against a table. Returns {columns: [{column, type, nullable, default, is_primary_key}, ...]}.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table": {
+                        "type": "string",
+                        "description": "Table name"
+                    },
+                    "schema": {
+                        "type": "string",
+                        "description": "Schema name (default: 'public')"
+                    }
+                },
+                "required": [
+                    "table"
+                ],
+                "additionalProperties": false,
+                "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+        }
+    ]
+}
